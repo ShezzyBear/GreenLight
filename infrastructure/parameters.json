@@ -3,7 +3,7 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "location": {
-      "value": "eastus"
+      "value": "eastus2"
     },
     "functionAppName": {
       "value": "fun-use2-tee-time-alerts"
