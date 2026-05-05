@@ -85,8 +85,8 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   location: location
   tags:     tags
   sku: {
-    name: 'Y1'
-    tier: 'Dynamic'
+    name: 'B1'
+    tier: 'Basic'
   }
   properties: {
     reserved: false   // false = Windows
@@ -111,14 +111,6 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         {
           name:  'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
-        }
-        {
-          name:  'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
-        }
-        {
-          name:  'WEBSITE_CONTENTSHARE'
-          value: toLower(functionAppName)
         }
         {
           name:  'FUNCTIONS_EXTENSION_VERSION'
