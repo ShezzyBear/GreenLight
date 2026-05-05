@@ -1,0 +1,169 @@
+name: Deploy Tee Time Bot - Azure Function
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infrastructure/**'
+      - '.azure-function/**'
+      - 'pipelines/deploy-function.yml'
+  workflow_dispatch:
+
+env:
+  AZURE_SUBSCRIPTION_ID: 22a583cb-68c9-4cda-a1b0-4b838a5ea729
+  RESOURCE_GROUP:        RGP-USE2-TEE-TIME-ALERTS-DV
+  LOCATION:              eastus2
+  FUNCTION_APP_NAME:     fun-use2-tee-time-alerts
+  BICEP_FILE:            infrastructure/main.bicep
+  PARAMETERS_FILE:       infrastructure/parameters.json
+
+jobs:
+
+  # ─── Stage 1: Validate (dry run) ───────────────────────────────────────────
+  validate:
+    name: Validate Bicep (Dry Run)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create Resource Group (if not exists)
+        run: |
+          az group create \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }} \
+            --tags Project=TeeTimeAlerts Environment=Development ManagedBy=Bicep \
+            --output none
+
+      - name: Validate Bicep template
+        run: |
+          az deployment group validate \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file ${{ env.BICEP_FILE }} \
+            --parameters ${{ env.PARAMETERS_FILE }} \
+            --parameters telegramBotToken="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+                         telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --output table
+
+      - name: What-if (preview changes)
+        run: |
+          az deployment group what-if \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file ${{ env.BICEP_FILE }} \
+            --parameters ${{ env.PARAMETERS_FILE }} \
+            --parameters telegramBotToken="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+                         telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --output table
+
+  # ─── Stage 2: Security Scan (Checkov) ──────────────────────────────────────
+  security-scan:
+    name: Security Scan (Checkov)
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python for Checkov
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Run Checkov on Bicep
+        run: |
+          checkov \
+            --directory infrastructure \
+            --framework bicep \
+            --output cli \
+            --output sarif \
+            --output-file-path . \
+            --soft-fail
+        continue-on-error: false
+
+      - name: Upload SARIF report
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true   # SARIF upload is best-effort
+
+  # ─── Stage 3: Deploy ───────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Azure
+    runs-on: ubuntu-latest
+    needs: [validate, security-scan]
+    environment: Development
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep infrastructure
+        id: deploy-infra
+        run: |
+          OUTPUT=$(az deployment group create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file ${{ env.BICEP_FILE }} \
+            --parameters ${{ env.PARAMETERS_FILE }} \
+            --parameters telegramBotToken="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+                         telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --output json)
+
+          echo "$OUTPUT"
+
+          WEBHOOK_URL=$(echo "$OUTPUT" | jq -r '.properties.outputs.webhookUrl.value')
+          echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
+
+      - name: Package Function App
+        run: |
+          cd .azure-function
+          zip -r ../function-app.zip .
+          cd ..
+
+      - name: Deploy Function App code
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.FUNCTION_APP_NAME }} \
+            --src function-app.zip \
+            --output table
+
+      - name: Register Telegram Webhook
+        run: |
+          WEBHOOK_URL="${{ steps.deploy-infra.outputs.webhook_url }}"
+          FUNCTION_KEY=$(az functionapp keys list \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.FUNCTION_APP_NAME }} \
+            --query "functionKeys.default" \
+            --output tsv)
+
+          FULL_URL="${WEBHOOK_URL}?code=${FUNCTION_KEY}"
+
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/setWebhook" \
+            -d "url=${FULL_URL}" | jq .
+
+          echo "Webhook registered: ${WEBHOOK_URL}"
+
+      - name: Verify webhook registration
+        run: |
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/getWebhookInfo" | jq .
+
+      - name: Deployment summary
+        run: |
+          echo "Deployment complete!"
+          echo "Function App : ${{ env.FUNCTION_APP_NAME }}"
+          echo "Resource Group : ${{ env.RESOURCE_GROUP }}"
+          echo "Webhook : ${{ steps.deploy-infra.outputs.webhook_url }}"
