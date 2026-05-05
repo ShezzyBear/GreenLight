@@ -1,6 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Tee Time Alerts - Azure Function App Infrastructure
 // Region: East US 2
+//
+// NOTE: Currently using B1 Basic plan due to Dynamic VM quota limit on
+// Development subscription. When migrating to Production, revert the
+// following two changes:
+//   1. appServicePlan sku: change name='B1'/tier='Basic' back to name='Y1'/tier='Dynamic'
+//   2. functionApp kind: change 'app' back to 'functionapp'
+//   3. Restore these two appSettings entries:
+//        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: '...' }
+//        { name: 'WEBSITE_CONTENTSHARE', value: toLower(functionAppName) }
+//        { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }
 // ─────────────────────────────────────────────────────────────────────────────
 
 @description('Azure region for all resources')
@@ -78,7 +88,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// ─── Consumption App Service Plan ─────────────────────────────────────────────
+// ─── Basic App Service Plan (B1) ─────────────────────────────────────────────
+// PRODUCTION REVERT: Change to name='Y1', tier='Dynamic' for Consumption plan
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name:     appServicePlanName
@@ -94,12 +105,15 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
 }
 
 // ─── Function App ─────────────────────────────────────────────────────────────
+// PRODUCTION REVERT: Change kind back to 'functionapp' and restore
+// WEBSITE_CONTENTAZUREFILECONNECTIONSTRING, WEBSITE_CONTENTSHARE,
+// and WEBSITE_RUN_FROM_PACKAGE app settings
 
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name:     functionAppName
   location: location
   tags:     tags
-  kind:     'functionapp'
+  kind:     'app'
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly:    true
@@ -143,10 +157,6 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         {
           name:  'STORAGE_ACCOUNT_KEY'
           value: storageAccount.listKeys().keys[0].value
-        }
-        {
-          name:  'WEBSITE_RUN_FROM_PACKAGE'
-          value: '1'
         }
       ]
     }
