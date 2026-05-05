@@ -1,11 +1,11 @@
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # TeeTimeScheduler/run.ps1
 # Timer Trigger - Runs every 4 hours, checks all active searches and notifies
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 param($Timer)
 
-# ─── Config ──────────────────────────────────────────────────────────────────
+# --- Config from App Settings -------------------------------------------------
 $BotToken       = $env:TELEGRAM_BOT_TOKEN
 $AuthChatId     = $env:TELEGRAM_CHAT_ID
 $StorageAccount = $env:STORAGE_ACCOUNT_NAME
@@ -16,13 +16,13 @@ $WindowStart    = '08:30'
 $WindowEnd      = '10:30'
 
 $Courses = @(
-    @{ Name = 'Rocky Point'; BookingClassId = 20276; ScheduleId = 10;   BookingUrl = 'https://foreupsoftware.com/index.php/booking/a/20276/10'    }
-    @{ Name = 'Fox Hollow';  BookingClassId = 19563; ScheduleId = $null; BookingUrl = 'https://foreupsoftware.com/index.php/booking/index/19563' }
+    @{ Name = 'Rocky Point'; BookingClassId = 35; ScheduleId = 4171; BookingUrl = 'https://foreupsoftware.com/index.php/booking/a/20276/10#/teetimes' }
+    @{ Name = 'Fox Hollow';  BookingClassId = 35; ScheduleId = 4170; BookingUrl = 'https://foreupsoftware.com/index.php/booking/a/20276/10#/teetimes' }
 )
 
 Write-Host "TeeTimeScheduler fired at $(Get-Date -Format 'o')"
 
-# ─── Helper: Send Telegram message ───────────────────────────────────────────
+# --- Helper: Send Telegram message --------------------------------------------
 function Send-TelegramMessage {
     param([string]$Text)
     $Uri  = "https://api.telegram.org/bot$BotToken/sendMessage"
@@ -34,7 +34,7 @@ function Send-TelegramMessage {
     }
 }
 
-# ─── Helper: Get all active searches from Table Storage ───────────────────────
+# --- Helper: Get all active searches from Table Storage -----------------------
 function Get-ActiveSearches {
     $StorageCtx = New-AzStorageContext -StorageAccountName $StorageAccount -StorageAccountKey $StorageKey
     $Table      = Get-AzStorageTable -Name $TableName -Context $StorageCtx
@@ -46,58 +46,93 @@ function Get-ActiveSearches {
     return @{ Table = $Table; Entities = $Table.CloudTable.ExecuteQuery($Query) }
 }
 
-# ─── Helper: Update LastChecked timestamp ─────────────────────────────────────
+# --- Helper: Update LastChecked timestamp -------------------------------------
 function Update-LastChecked {
     param($Table, $Entity)
     $Entity.Properties['LastChecked'] = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString((Get-Date -Format 'o'))
     $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($Entity)) | Out-Null
 }
 
-# ─── Helper: Mark search as completed ────────────────────────────────────────
+# --- Helper: Mark search as completed -----------------------------------------
 function Complete-Search {
     param($Table, $Entity)
     $Entity.Properties['Status'] = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString('found')
     $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($Entity)) | Out-Null
 }
 
-# ─── Helper: Check ForeUp for available tee times ────────────────────────────
+# --- Helper: Check ForeUp for available tee times ----------------------------
 function Get-TeeTimeHits {
     param([string]$DateStr, [int]$Players)
 
     $Hits = @()
 
     foreach ($Course in $Courses) {
-        $Uri    = 'https://foreupsoftware.com/index.php/api/booking/times'
-        $Params = @{
-            time          = 'all'
-            date          = $DateStr
-            holes         = 'all'
-            players       = $Players
-            booking_class = $Course.BookingClassId
-            specials_only = 0
-            api_key       = 'no_limits'
+        $Uri = 'https://foreupsoftware.com/index.php/api/booking/times'
+        $QueryString = [System.Web.HttpUtility]::ParseQueryString('')
+        $QueryString.Add('time',           'all')
+        $QueryString.Add('date',           $DateStr)
+        $QueryString.Add('holes',          'all')
+        $QueryString.Add('players',        $Players.ToString())
+        $QueryString.Add('booking_class',  $Course.BookingClassId.ToString())
+        $QueryString.Add('schedule_id',    $Course.ScheduleId.ToString())
+        $QueryString.Add('schedule_ids[]', '4169')
+        $QueryString.Add('schedule_ids[]', '4170')
+        $QueryString.Add('schedule_ids[]', '4168')
+        $QueryString.Add('schedule_ids[]', '4171')
+        $QueryString.Add('schedule_ids[]', '4177')
+        $QueryString.Add('specials_only',  '0')
+        $QueryString.Add('api_key',        'no_limits')
+        $QueryString.Add('is_aggregate',   'true')
+
+        $FullUri = "$Uri`?$($QueryString.ToString())"
+        $Headers = @{
+            'X-Requested-With' = 'XMLHttpRequest'
+            'User-Agent'       = 'Mozilla/5.0'
+            'Referer'          = 'https://foreupsoftware.com/'
         }
-        if ($Course.ScheduleId) { $Params['schedule_id'] = $Course.ScheduleId }
 
         try {
-            $Headers  = @{ 'X-Requested-With' = 'XMLHttpRequest' }
-            $Response = Invoke-RestMethod -Uri $Uri -Method Get -Body $Params -Headers $Headers -TimeoutSec 15
+            $Response = Invoke-RestMethod -Uri $FullUri -Method Get -Headers $Headers -TimeoutSec 15
 
             if ($Response -is [array]) {
                 foreach ($Slot in $Response) {
                     try {
-                        $SlotTime = [datetime]::ParseExact($Slot.time.Trim().ToLower(), 'h:mmtt', $null)
-                        $SlotStr  = $SlotTime.ToString('HH:mm')
+                        $SlotTime = $null
+                        $TimeStr  = $Slot.time.Trim()
+
+                        # Format 1: full datetime "2026-05-09 16:00"
+                        if ($TimeStr -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$') {
+                            try { $SlotTime = [datetime]::ParseExact($TimeStr, 'yyyy-MM-dd HH:mm', $null) } catch {}
+                        }
+
+                        # Format 2: 12-hour "9:00am" or "10:30am"
+                        if ($null -eq $SlotTime) {
+                            foreach ($fmt in @('h:mmtt', 'hh:mmtt', 'h:mm tt', 'hh:mm tt')) {
+                                try {
+                                    $SlotTime = [datetime]::ParseExact($TimeStr.ToLower(), $fmt, $null)
+                                    break
+                                } catch { continue }
+                            }
+                        }
+
+                        if ($null -eq $SlotTime) {
+                            Write-Host "Could not parse time: '$($Slot.time)' - skipping"
+                            continue
+                        }
+
+                        $SlotStr = $SlotTime.ToString('HH:mm')
                         if ($SlotStr -ge $WindowStart -and $SlotStr -le $WindowEnd) {
                             $Hits += @{
                                 Course  = $Course.Name
-                                Time    = $Slot.time
+                                Time    = $SlotTime.ToString('h:mmtt').ToLower()
                                 Holes   = $Slot.holes
                                 Spots   = $Slot.available_spots
                                 BookUrl = $Course.BookingUrl
                             }
                         }
-                    } catch { continue }
+                    } catch {
+                        Write-Host "Slot parse error: $_"
+                    }
                 }
             }
         } catch {
@@ -108,9 +143,9 @@ function Get-TeeTimeHits {
     return $Hits
 }
 
-# ─── Main: fetch and process all active searches ──────────────────────────────
+# --- Main: fetch and process all active searches ------------------------------
 
-$Result = Get-ActiveSearches
+$Result   = Get-ActiveSearches
 $Table    = $Result.Table
 $Searches = $Result.Entities
 
@@ -122,11 +157,11 @@ if ($null -eq $Searches -or @($Searches).Count -eq 0) {
 Write-Host "Found $(@($Searches).Count) active search(es) to check."
 
 foreach ($Search in $Searches) {
-    $DateKey   = $Search.RowKey                         # yyyy-MM-dd
+    $DateKey   = $Search.RowKey                          # yyyy-MM-dd
     $Players   = $Search.Properties['Players'].Int32Value
     $DateObj   = [datetime]::ParseExact($DateKey, 'yyyy-MM-dd', $null)
     $DateLabel = $DateObj.ToString('dddd, dd MMMM yyyy')
-    $DateStr   = $DateObj.ToString('MM-dd-yyyy')        # ForeUp format
+    $DateStr   = $DateObj.ToString('MM-dd-yyyy')         # ForeUp format
 
     Write-Host "Checking $DateKey for $Players player(s)..."
 
@@ -151,7 +186,7 @@ foreach ($Search in $Searches) {
             $Lines += "  Book: $($Hit.BookUrl)"
             $Lines += ""
         }
-        $Lines += "Send `"Done`" or `"I've booked it`" once secured!"
+        $Lines += "Send ``Done`` or ``I've booked it`` once secured!"
         Send-TelegramMessage ($Lines -join "`n")
 
         # NOTE: We do NOT auto-complete the search here so you keep getting
