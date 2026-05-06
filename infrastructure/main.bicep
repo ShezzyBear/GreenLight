@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 // Tee Time Alerts - Azure Function App Infrastructure
 // Region: East US 2
-// Plan: Y1 Consumption
+// Plan: B1 Basic (pending Dynamic VM quota approval for Y1 Consumption)
 // -----------------------------------------------------------------------------
 
 @description('Azure region for all resources')
@@ -83,15 +83,17 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// --- Consumption App Service Plan (Y1) ---------------------------------------
+// --- B1 Basic App Service Plan -----------------------------------------------
+// NOTE: Revert to Y1/Dynamic once Dynamic VM quota increase is approved
+// for the Development subscription in East US 2
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name:     appServicePlanName
   location: location
   tags:     tags
   sku: {
-    name: 'Y1'
-    tier: 'Dynamic'
+    name: 'B1'
+    tier: 'Basic'
   }
   properties: {
     reserved: false   // false = Windows
@@ -99,12 +101,14 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
 }
 
 // --- Function App ------------------------------------------------------------
+// NOTE: Change kind to 'functionapp' and restore WEBSITE_CONTENT* settings
+// once Y1 Consumption plan is available
 
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name:     functionAppName
   location: location
   tags:     tags
-  kind:     'functionapp'
+  kind:     'app'
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly:    true
@@ -116,18 +120,6 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         {
           name:  'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
-        }
-        {
-          name:  'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
-        }
-        {
-          name:  'WEBSITE_CONTENTSHARE'
-          value: toLower(functionAppName)
-        }
-        {
-          name:  'WEBSITE_RUN_FROM_PACKAGE'
-          value: '1'
         }
         {
           name:  'FUNCTIONS_EXTENSION_VERSION'
