@@ -1,10 +1,9 @@
 # profile.ps1 - Runs on Function App cold start
 # Azure Functions PowerShell profile
 
-# Uncomment to enable Az module authentication via managed identity
-# if ($env:MSI_ENDPOINT) {
-#     Connect-AzAccount -Identity
-# }
+# Import bundled Az modules explicitly rather than relying on managed dependencies
+Import-Module "$PSScriptRoot/Modules/Az.Accounts/5.4.0/Az.Accounts.psd1" -Force
+Import-Module "$PSScriptRoot/Modules/Az.Storage/6.0.1/Az.Storage.psd1" -Force
 
 # Set error preference
 $ErrorActionPreference = 'Stop'
