@@ -9,7 +9,7 @@
       "value": "fun-use2-tee-time-alerts"
     },
     "storageAccountName": {
-      "value": "stoteetime"
+      "value": "stoteetimealerts"
     },
     "telegramBotToken": {
       "reference": {

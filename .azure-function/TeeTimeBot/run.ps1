@@ -10,6 +10,7 @@ $BotToken       = $env:TELEGRAM_BOT_TOKEN
 $AuthChatId     = $env:TELEGRAM_CHAT_ID
 $StorageAccount = $env:STORAGE_ACCOUNT_NAME
 $StorageKey     = $env:STORAGE_ACCOUNT_KEY
+$SecretToken    = $env:TELEGRAM_SECRET_TOKEN
 $TableName      = 'ActiveSearches'
 
 $WindowStart    = '08:30'
@@ -237,6 +238,17 @@ function Get-ActiveSearchSummary {
 
 # --- Main logic ---------------------------------------------------------------
 
+# Validate Telegram secret token header - return 200 regardless to prevent retries
+$IncomingToken = $Request.Headers['X-Telegram-Bot-Api-Secret-Token']
+if ($IncomingToken -ne $SecretToken) {
+    Write-Host "Invalid or missing secret token - ignoring request"
+    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{ StatusCode = 200; Body = 'OK' })
+    return
+}
+
+# Return 200 OK immediately so Telegram does not retry while we process
+Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{ StatusCode = 200; Body = 'OK' })
+
 # Parse incoming Telegram webhook body
 $Body    = $Request.Body
 $Message = $Body.message
@@ -245,15 +257,11 @@ $Text    = $Message.text
 
 Write-Host "Message received from chat $ChatId : $Text"
 
-# Security: only respond to your own chat
+# Security: only process messages from your own chat
 if ([string]$ChatId -ne $AuthChatId) {
     Write-Host "Unauthorised chat ID $ChatId - ignoring"
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{ StatusCode = 200; Body = 'OK' })
     return
 }
-
-# FIX: Return 200 OK immediately to prevent Telegram webhook retry loop
-Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{ StatusCode = 200; Body = 'OK' })
 
 $TextLower = $Text.ToLower().Trim()
 
