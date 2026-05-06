@@ -13,7 +13,7 @@ on:
 env:
   AZURE_SUBSCRIPTION_ID: 22a583cb-68c9-4cda-a1b0-4b838a5ea729
   RESOURCE_GROUP:        RGP-USE2-TEE-TIME-ALERTS-DV
-  LOCATION:              eastus2
+  LOCATION:              eastus
   FUNCTION_APP_NAME:     fun-use2-tee-time-alerts
   BICEP_FILE:            infrastructure/main.bicep
   PARAMETERS_FILE:       infrastructure/parameters.json
@@ -59,6 +59,7 @@ jobs:
                          telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
                          telegramSecretToken="${{ secrets.TELEGRAM_SECRET_TOKEN }}" \
             --output table
+        continue-on-error: true
 
       - name: What-if (preview changes)
         run: |
