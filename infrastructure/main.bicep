@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 // Tee Time Alerts - Azure Function App Infrastructure
 // Region: East US 2
-// Plan: B1 Basic (pending Dynamic VM quota approval for Y1 Consumption)
+// Plan: S1 Standard (pending Dynamic VM quota approval for Y1 Consumption)
 // -----------------------------------------------------------------------------
 
 @description('Azure region for all resources')
@@ -83,7 +83,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// --- B1 Basic App Service Plan -----------------------------------------------
+// --- Standard App Service Plan (S1) ------------------------------------------
 // NOTE: Revert to Y1/Dynamic once Dynamic VM quota increase is approved
 // for the Development subscription in East US 2
 
@@ -92,8 +92,8 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   location: location
   tags:     tags
   sku: {
-    name: 'B1'
-    tier: 'Basic'
+    name: 'S1'
+    tier: 'Standard'
   }
   properties: {
     reserved: false   // false = Windows
