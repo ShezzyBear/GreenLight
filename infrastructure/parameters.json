@@ -9,17 +9,15 @@
       "value": "fun-use2-tee-time-alerts"
     },
     "storageAccountName": {
-      "value": "stoteetimealerts"
+      "value": "stouse2teetimealerts"
     },
     "telegramBotToken": {
-      "reference": {
-        "keyVault": {
-          "comment": "Injected via GitHub Actions secret - do not hardcode here"
-        }
-      },
       "value": ""
     },
     "telegramChatId": {
+      "value": ""
+    },
+    "telegramSecretToken": {
       "value": ""
     },
     "environment": {

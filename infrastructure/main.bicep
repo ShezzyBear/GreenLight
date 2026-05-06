@@ -1,17 +1,8 @@
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Tee Time Alerts - Azure Function App Infrastructure
 // Region: East US 2
-//
-// NOTE: Currently using B1 Basic plan due to Dynamic VM quota limit on
-// Development subscription. When migrating to Production, revert the
-// following two changes:
-//   1. appServicePlan sku: change name='B1'/tier='Basic' back to name='Y1'/tier='Dynamic'
-//   2. functionApp kind: change 'app' back to 'functionapp'
-//   3. Restore these two appSettings entries:
-//        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: '...' }
-//        { name: 'WEBSITE_CONTENTSHARE', value: toLower(functionAppName) }
-//        { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }
-// ─────────────────────────────────────────────────────────────────────────────
+// Plan: Y1 Consumption
+// -----------------------------------------------------------------------------
 
 @description('Azure region for all resources')
 param location string = 'eastus2'
@@ -29,10 +20,14 @@ param telegramBotToken string
 @description('Telegram Chat ID')
 param telegramChatId string
 
+@description('Telegram webhook secret token')
+@secure()
+param telegramSecretToken string
+
 @description('Environment tag')
 param environment string = 'Development'
 
-// ─── Variables ───────────────────────────────────────────────────────────────
+// --- Variables ---------------------------------------------------------------
 
 var appServicePlanName = 'asp-${functionAppName}'
 var appInsightsName    = 'appi-${functionAppName}'
@@ -42,7 +37,7 @@ var tags = {
   ManagedBy:   'Bicep'
 }
 
-// ─── Storage Account ─────────────────────────────────────────────────────────
+// --- Storage Account ---------------------------------------------------------
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name:     storageAccountName
@@ -53,9 +48,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   }
   kind: 'StorageV2'
   properties: {
-    supportsHttpsTrafficOnly:      true
-    minimumTlsVersion:             'TLS1_2'
-    allowBlobPublicAccess:         false
+    supportsHttpsTrafficOnly: true
+    minimumTlsVersion:        'TLS1_2'
+    allowBlobPublicAccess:    false
     networkAcls: {
       defaultAction: 'Allow'
       bypass:        'AzureServices'
@@ -63,7 +58,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   }
 }
 
-// ─── Table Service (for active search state) ─────────────────────────────────
+// --- Table Service (for active search state) ---------------------------------
 
 resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-01-01' = {
   name:   'default'
@@ -75,7 +70,7 @@ resource activeSearchesTable 'Microsoft.Storage/storageAccounts/tableServices/ta
   parent: tableService
 }
 
-// ─── Application Insights ────────────────────────────────────────────────────
+// --- Application Insights ----------------------------------------------------
 
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name:     appInsightsName
@@ -88,32 +83,28 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// ─── Basic App Service Plan (B1) ─────────────────────────────────────────────
-// PRODUCTION REVERT: Change to name='Y1', tier='Dynamic' for Consumption plan
+// --- Consumption App Service Plan (Y1) ---------------------------------------
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name:     appServicePlanName
   location: location
   tags:     tags
   sku: {
-    name: 'B1'
-    tier: 'Basic'
+    name: 'Y1'
+    tier: 'Dynamic'
   }
   properties: {
     reserved: false   // false = Windows
   }
 }
 
-// ─── Function App ─────────────────────────────────────────────────────────────
-// PRODUCTION REVERT: Change kind back to 'functionapp' and restore
-// WEBSITE_CONTENTAZUREFILECONNECTIONSTRING, WEBSITE_CONTENTSHARE,
-// and WEBSITE_RUN_FROM_PACKAGE app settings
+// --- Function App ------------------------------------------------------------
 
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name:     functionAppName
   location: location
   tags:     tags
-  kind:     'app'
+  kind:     'functionapp'
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly:    true
@@ -125,6 +116,18 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         {
           name:  'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
+        }
+        {
+          name:  'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
+        }
+        {
+          name:  'WEBSITE_CONTENTSHARE'
+          value: toLower(functionAppName)
+        }
+        {
+          name:  'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
         }
         {
           name:  'FUNCTIONS_EXTENSION_VERSION'
@@ -151,6 +154,10 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
           value: telegramChatId
         }
         {
+          name:  'TELEGRAM_SECRET_TOKEN'
+          value: telegramSecretToken
+        }
+        {
           name:  'STORAGE_ACCOUNT_NAME'
           value: storageAccount.name
         }
@@ -163,7 +170,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   }
 }
 
-// ─── Outputs ─────────────────────────────────────────────────────────────────
+// --- Outputs -----------------------------------------------------------------
 
 output functionAppName     string = functionApp.name
 output functionAppHostname string = functionApp.properties.defaultHostName

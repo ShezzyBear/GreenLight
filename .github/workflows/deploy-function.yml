@@ -20,7 +20,7 @@ env:
 
 jobs:
 
-  # ─── Stage 1: Validate (dry run) ───────────────────────────────────────────
+  # --- Stage 1: Validate (dry run) --------------------------------------------
   validate:
     name: Validate Bicep (Dry Run)
     runs-on: ubuntu-latest
@@ -33,11 +33,19 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Register required resource providers
+        run: |
+          az provider register --namespace Microsoft.Web --wait
+          az provider register --namespace microsoft.insights --wait
+          az provider register --namespace microsoft.operationalinsights --wait
+          az provider register --namespace Microsoft.Storage --wait
+
       - name: Create Resource Group (if not exists)
         run: |
           az group create \
             --name ${{ env.RESOURCE_GROUP }} \
             --location ${{ env.LOCATION }} \
+            --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} \
             --tags Project=TeeTimeAlerts Environment=Development ManagedBy=Bicep \
             --output none
 
@@ -49,6 +57,7 @@ jobs:
             --parameters ${{ env.PARAMETERS_FILE }} \
             --parameters telegramBotToken="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
                          telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
+                         telegramSecretToken="${{ secrets.TELEGRAM_SECRET_TOKEN }}" \
             --output table
 
       - name: What-if (preview changes)
@@ -59,9 +68,10 @@ jobs:
             --parameters ${{ env.PARAMETERS_FILE }} \
             --parameters telegramBotToken="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
                          telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
+                         telegramSecretToken="${{ secrets.TELEGRAM_SECRET_TOKEN }}" \
             --output table
 
-  # ─── Stage 2: Security Scan (Checkov) ──────────────────────────────────────
+  # --- Stage 2: Security Scan (Checkov) ---------------------------------------
   security-scan:
     name: Security Scan (Checkov)
     runs-on: ubuntu-latest
@@ -94,9 +104,9 @@ jobs:
         if: always()
         with:
           sarif_file: results.sarif
-        continue-on-error: true   # SARIF upload is best-effort
+        continue-on-error: true
 
-  # ─── Stage 3: Deploy ───────────────────────────────────────────────────────
+  # --- Stage 3: Deploy --------------------------------------------------------
   deploy:
     name: Deploy to Azure
     runs-on: ubuntu-latest
@@ -111,6 +121,13 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Register required resource providers
+        run: |
+          az provider register --namespace Microsoft.Web --wait
+          az provider register --namespace microsoft.insights --wait
+          az provider register --namespace microsoft.operationalinsights --wait
+          az provider register --namespace Microsoft.Storage --wait
+
       - name: Deploy Bicep infrastructure
         id: deploy-infra
         run: |
@@ -120,6 +137,7 @@ jobs:
             --parameters ${{ env.PARAMETERS_FILE }} \
             --parameters telegramBotToken="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
                          telegramChatId="${{ secrets.TELEGRAM_CHAT_ID }}" \
+                         telegramSecretToken="${{ secrets.TELEGRAM_SECRET_TOKEN }}" \
             --output json)
 
           echo "$OUTPUT"
@@ -144,16 +162,11 @@ jobs:
       - name: Register Telegram Webhook
         run: |
           WEBHOOK_URL="${{ steps.deploy-infra.outputs.webhook_url }}"
-          FUNCTION_KEY=$(az functionapp keys list \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.FUNCTION_APP_NAME }} \
-            --query "functionKeys.default" \
-            --output tsv)
-
-          FULL_URL="${WEBHOOK_URL}?code=${FUNCTION_KEY}"
 
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/setWebhook" \
-            -d "url=${FULL_URL}" | jq .
+            -d "url=${WEBHOOK_URL}" \
+            -d "secret_token=${{ secrets.TELEGRAM_SECRET_TOKEN }}" \
+            -d "drop_pending_updates=true" | jq .
 
           echo "Webhook registered: ${WEBHOOK_URL}"
 
