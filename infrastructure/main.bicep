@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------------
 // Tee Time Alerts - Azure Function App Infrastructure
-// Region: East US 2
+// Region: East US
 // Plan: B1 Basic (pending Dynamic VM quota approval for Y1 Consumption)
 // -----------------------------------------------------------------------------
 
