@@ -278,6 +278,17 @@ function Test-PendingCancel {
     return $null -ne $Result
 }
 
+# --- Helper: Check if an active search already exists for a given date --------
+function Test-DuplicateSearch {
+    param($Table, [string]$RowKey)
+    $Result = $Table.CloudTable.Execute(
+        [Microsoft.Azure.Cosmos.Table.TableOperation]::Retrieve($AuthChatId, $RowKey)
+    ).Result
+    if ($null -eq $Result) { return $false }
+    $Status = $Result.Properties['Status'].StringValue
+    return $Status -eq 'active'
+}
+
 # --- Main logic ---------------------------------------------------------------
 
 # Validate Telegram secret token header - return 200 regardless to prevent retries
@@ -458,7 +469,7 @@ To stop when only one search is active:
 To back out without making changes:
   "Nevermind", "Never mind", "Forget it"
 
-I check Rocky Point and Fox Hollow for 8:30-10:30 AM slots every hour automatically.
+I check Rocky Point and Fox Hollow for 8:30-10:30 AM slots every 30 minutes automatically.
 "@
     Send-TelegramMessage $HelpText
     return
@@ -476,7 +487,18 @@ if ($null -eq $ParsedDate) {
     return
 }
 
-$DateLabel = $ParsedDate.ToString('dddd, dd MMMM yyyy')
+$DateLabel  = $ParsedDate.ToString('dddd, dd MMMM yyyy')
+$TargetKey  = $ParsedDate.ToString('yyyy-MM-dd')
+
+# Duplicate search protection - check before saving
+if (Test-DuplicateSearch -Table $Table -RowKey $TargetKey) {
+    $ExistingEntity  = $Table.CloudTable.Execute(
+        [Microsoft.Azure.Cosmos.Table.TableOperation]::Retrieve($AuthChatId, $TargetKey)
+    ).Result
+    $ExistingPlayers = $ExistingEntity.Properties['Players'].Int32Value
+    Send-TelegramMessage "You're already watching $DateLabel for $ExistingPlayers player(s). Send ``Stop $DateLabel`` if you'd like to cancel that search and start a new one."
+    return
+}
 
 Send-TelegramMessage "Got it! Checking Rocky Point and Fox Hollow for $DateLabel ($ParsedPlayers player(s)) in the 8:30-10:30 AM window..."
 
@@ -494,5 +516,5 @@ if ($Hits.Count -gt 0) {
     $Lines += "`nSend ``Done [date]`` or ``Stop [date]`` once you've secured your slot!"
     Send-TelegramMessage ($Lines -join "`n")
 } else {
-    Send-TelegramMessage "No times available right now in the 8:30-10:30 AM window for $DateLabel.`n`nI'll keep checking every hour and ping you when something opens up. Send ``Stop`` at any time to cancel."
+    Send-TelegramMessage "No times available right now in the 8:30-10:30 AM window for $DateLabel.`n`nI'll keep checking every 30 minutes and ping you when something opens up. Send ``Stop`` at any time to cancel."
 }
