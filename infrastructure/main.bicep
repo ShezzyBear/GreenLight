@@ -7,6 +7,7 @@
 // --- Checkov Suppressions ----------------------------------------------------
 // The following checks are suppressed via --skip-check in the pipeline.
 // CKV_AZURE_43  : Storage account name is parameter-driven and follows Azure naming rules
+// CKV_AZURE_59  : Storage networkAcls defaultAction set to Allow - Deny blocks Kudu filesystem access on Y1 Consumption plan (WEBSITE_CONTENTAZUREFILECONNECTIONSTRING file share becomes inaccessible)
 // CKV_AZURE_206 : LRS replication is intentional for a low-cost development workload
 // CKV_AZURE_225 : Zone redundancy is not supported on Y1 Consumption plan
 // CKV_AZURE_16  : AAD authentication not required - webhook secured via Telegram secret token header
@@ -65,7 +66,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
     minimumTlsVersion:        'TLS1_2'
     allowBlobPublicAccess:    false
     networkAcls: {
-      defaultAction: 'Deny'
+      defaultAction: 'Allow'
       bypass:        'AzureServices'
     }
   }
