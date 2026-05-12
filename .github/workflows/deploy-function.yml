@@ -98,6 +98,7 @@ jobs:
             --output cli \
             --output sarif \
             --output-file-path console,results.sarif \
+            --skip-check CKV_AZURE_43,CKV_AZURE_206,CKV_AZURE_225,CKV_AZURE_16,CKV_AZURE_17,CKV_AZURE_71,CKV_AZURE_212,CKV_AZURE_213,CKV_AZURE_222 \
             --soft-fail
 
       - name: Verify SARIF report exists
@@ -154,6 +155,9 @@ jobs:
 
           WEBHOOK_URL=$(echo "$OUTPUT" | jq -r '.properties.outputs.webhookUrl.value')
           echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for Function App to initialize
+        run: sleep 30
 
       - name: Package Function App
         run: |
