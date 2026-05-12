@@ -93,9 +93,6 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
     name: 'Y1'
     tier: 'Dynamic'
   }
-  properties: {
-    computeMode: 'Dynamic'
-  }
 }
 
 // --- Function App ------------------------------------------------------------
