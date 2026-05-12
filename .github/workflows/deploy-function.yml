@@ -156,28 +156,6 @@ jobs:
 
           WEBHOOK_URL=$(echo "$OUTPUT" | jq -r '.properties.outputs.webhookUrl.value')
           echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
-      
-      - name: Wait for Kudu to become ready
-        run: |
-          echo "Fetching Kudu credentials..."
-          KUDU_CREDS=$(az functionapp deployment list-publishing-credentials \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.FUNCTION_APP_NAME }} \
-            --query '[publishingUserName,publishingPassword]' \
-            -o tsv | tr '\t' ':')
- 
-          echo "Polling Kudu SCM endpoint (max 4 minutes)..."
-          for i in {1..24}; do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              "https://${{ env.FUNCTION_APP_NAME }}.scm.azurewebsites.net/api/settings" \
-              -u "$KUDU_CREDS")
-            echo "Attempt $i: Kudu responded with HTTP $HTTP_STATUS"
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "Kudu is ready"
-              break
-            fi
-            sleep 10
-          done
           
       - name: Package Function App
         run: |
