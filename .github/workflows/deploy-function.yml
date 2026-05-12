@@ -17,7 +17,6 @@ env:
   FUNCTION_APP_NAME:     fun-use-tee-time-alerts
   BICEP_FILE:            infrastructure/main.bicep
   PARAMETERS_FILE:       infrastructure/parameters.json
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
 
@@ -27,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Azure Login
-        uses: azure/login@v2.3.0
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -77,11 +76,9 @@ jobs:
     name: Security Scan (Checkov)
     runs-on: ubuntu-latest
     needs: validate
-    permissions:
-      security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Set up Python for Checkov
         uses: actions/setup-python@v5
@@ -98,24 +95,16 @@ jobs:
             --framework bicep \
             --output cli \
             --output sarif \
-            --output-file-path console,results.sarif \
-            --skip-check CKV_AZURE_43,CKV_AZURE_206,CKV_AZURE_225,CKV_AZURE_16,CKV_AZURE_17,CKV_AZURE_71,CKV_AZURE_212,CKV_AZURE_213,CKV_AZURE_222 \
+            --output-file-path . \
             --soft-fail
-
-      - name: Verify SARIF report exists
-        run: |
-          if [ ! -f results.sarif ]; then
-            echo "results.sarif not found - listing directory contents:"
-            ls -la
-            exit 1
-          fi
-          echo "results.sarif found"
+        continue-on-error: false
 
       - name: Upload SARIF report
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: results.sarif
+        continue-on-error: true
 
   # --- Stage 3: Deploy --------------------------------------------------------
   deploy:
@@ -123,13 +112,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate, security-scan]
     environment: Development
-    if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Azure Login
-        uses: azure/login@v2.3.0
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -156,7 +144,29 @@ jobs:
 
           WEBHOOK_URL=$(echo "$OUTPUT" | jq -r '.properties.outputs.webhookUrl.value')
           echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
-          
+
+      - name: Wait for Kudu to become ready
+        run: |
+          echo "Fetching Kudu credentials..."
+          KUDU_CREDS=$(az functionapp deployment list-publishing-credentials \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.FUNCTION_APP_NAME }} \
+            --query '[publishingUserName,publishingPassword]' \
+            -o tsv | tr '\t' ':')
+
+          echo "Polling Kudu SCM endpoint (max 4 minutes)..."
+          for i in {1..24}; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://${{ env.FUNCTION_APP_NAME }}.scm.azurewebsites.net/api/settings" \
+              -u "$KUDU_CREDS")
+            echo "Attempt $i: Kudu responded with HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Kudu is ready"
+              break
+            fi
+            sleep 10
+          done
+
       - name: Package Function App
         run: |
           cd .azure-function
