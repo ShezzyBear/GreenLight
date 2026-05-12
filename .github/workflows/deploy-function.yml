@@ -158,7 +158,21 @@ jobs:
           echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
 
       - name: Wait for Function App to initialize
-        run: sleep 30
+        run: |
+          echo "Waiting for Function App to become ready..."
+          for i in {1..12}; do
+            STATUS=$(az functionapp show \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --name ${{ env.FUNCTION_APP_NAME }} \
+              --query "state" -o tsv)
+            echo "Attempt $i: Function App state = $STATUS"
+            if [ "$STATUS" = "Running" ]; then
+              echo "Function App is running - waiting 15 more seconds for Kudu to initialize..."
+              sleep 15
+              break
+            fi
+            sleep 10
+          done
 
       - name: Package Function App
         run: |
