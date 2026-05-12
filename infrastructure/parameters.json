@@ -6,10 +6,10 @@
       "value": "eastus"
     },
     "functionAppName": {
-      "value": "fun-use-tee-time-alerts"
+      "value": "fun-use-green-light"
     },
     "storageAccountName": {
-      "value": "stouseteetimealerts"
+      "value": "stousegreenlightdv"
     },
     "telegramBotToken": {
       "value": ""

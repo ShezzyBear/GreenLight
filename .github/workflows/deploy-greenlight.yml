@@ -1,4 +1,4 @@
-name: Deploy Tee Time Bot - Azure Function
+name: Deploy Green Light - Azure Function
 
 on:
   push:
@@ -7,14 +7,14 @@ on:
     paths:
       - 'infrastructure/**'
       - '.azure-function/**'
-      - 'pipelines/deploy-function.yml'
+      - 'pipelines/deploy-greenlight.yml'
   workflow_dispatch:
 
 env:
   AZURE_SUBSCRIPTION_ID: 22a583cb-68c9-4cda-a1b0-4b838a5ea729
-  RESOURCE_GROUP:        RGP-USE-TEE-TIME-ALERTS-DV
+  RESOURCE_GROUP:        RGP-USE-GREEN-LIGHT-DV
   LOCATION:              eastus
-  FUNCTION_APP_NAME:     fun-use-tee-time-alerts
+  FUNCTION_APP_NAME:     fun-use-green-light
   BICEP_FILE:            infrastructure/main.bicep
   PARAMETERS_FILE:       infrastructure/parameters.json
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -47,7 +47,7 @@ jobs:
             --name ${{ env.RESOURCE_GROUP }} \
             --location ${{ env.LOCATION }} \
             --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} \
-            --tags Project=TeeTimeAlerts Environment=Development ManagedBy=Bicep \
+            --tags Project=GreenLight Environment=Development ManagedBy=Bicep \
             --output none
 
       - name: Validate Bicep template
@@ -156,7 +156,7 @@ jobs:
 
           WEBHOOK_URL=$(echo "$OUTPUT" | jq -r '.properties.outputs.webhookUrl.value')
           echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
-          
+
       - name: Package Function App
         run: |
           cd .azure-function
