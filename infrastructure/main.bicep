@@ -39,6 +39,8 @@ var tags = {
 
 // --- Storage Account ---------------------------------------------------------
 
+// checkov:skip=CKV_AZURE_43: Storage account name is parameter-driven and follows Azure naming rules
+// checkov:skip=CKV_AZURE_206: LRS replication is intentional for a low-cost development workload
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name:     storageAccountName
   location: location
@@ -52,7 +54,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
     minimumTlsVersion:        'TLS1_2'
     allowBlobPublicAccess:    false
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: 'Deny'
       bypass:        'AzureServices'
     }
   }
@@ -85,6 +87,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 
 // --- Y1 Consumption App Service Plan -----------------------------------------
 
+// checkov:skip=CKV_AZURE_225: Zone redundancy is not supported on Y1 Consumption plan
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name:     appServicePlanName
   location: location
@@ -97,6 +100,12 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
 
 // --- Function App ------------------------------------------------------------
 
+// checkov:skip=CKV_AZURE_16: AAD authentication not required - webhook secured via Telegram secret token header
+// checkov:skip=CKV_AZURE_17: Client certificates not applicable for a Telegram webhook receiver
+// checkov:skip=CKV_AZURE_71: Managed identity migration is a backlog item - currently using storage account key
+// checkov:skip=CKV_AZURE_212: Minimum instance count not configurable on Y1 Consumption plan
+// checkov:skip=CKV_AZURE_213: Health check endpoint not warranted for this workload
+// checkov:skip=CKV_AZURE_222: Public network access required for Telegram webhook delivery
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name:     functionAppName
   location: location
@@ -109,6 +118,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
       powerShellVersion: '7.4'
       ftpsState:         'Disabled'
       minTlsVersion:     '1.2'
+      http20Enabled:     true
       appSettings: [
         {
           name:  'AzureWebJobsStorage'
