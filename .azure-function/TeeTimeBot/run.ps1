@@ -435,7 +435,7 @@ if ($TextLower -match '\b(status|what are you watching|what are you checking)\b'
 if ($TextLower -match '\b(help|commands|what can you do)\b') {
     Clear-PendingCancel -Table $Table
     $HelpText = @"
-Tee Time Bot - Commands
+Green Light Bot - Commands
 
 To start a search:
   "Looking for a tee time on May 17th for 2 players"

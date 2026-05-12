@@ -14,7 +14,7 @@ env:
   AZURE_SUBSCRIPTION_ID: 22a583cb-68c9-4cda-a1b0-4b838a5ea729
   RESOURCE_GROUP:        RGP-USE-GREEN-LIGHT-DV
   LOCATION:              eastus
-  FUNCTION_APP_NAME:     fun-use-green-light
+  FUNCTION_APP_NAME:     fun-use-green-light-dv
   BICEP_FILE:            infrastructure/main.bicep
   PARAMETERS_FILE:       infrastructure/parameters.json
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

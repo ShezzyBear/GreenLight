@@ -43,8 +43,8 @@ param environment string = 'Development'
 
 // --- Variables ---------------------------------------------------------------
 
-var appServicePlanName = 'asp-${functionAppName}'
-var appInsightsName    = 'ais-${functionAppName}'
+var appServicePlanName = 'asp-use-green-light-dv'
+var appInsightsName    = 'ais-use-green-light-dv'
 var tags = {
   Environment: environment
   Project:     'TeeTimeAlerts'

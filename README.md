@@ -25,7 +25,7 @@ GreenLight/
 │   └── deploy-greenlight.yml     (IaC pipeline - validate, Checkov, deploy)
 ├── .azure-function/
 │   ├── host.json
-│   ├── profile.ps1               (imports Az.Accounts and Az.Storage from bundled Modules)
+│   ├── profile.ps1               (imports Az modules from bundled Modules folder)
 │   ├── requirements.psd1         (empty @{} - modules are bundled directly)
 │   ├── Modules/
 │   │   ├── Az.Accounts/
@@ -78,7 +78,7 @@ Single table `ActiveSearches` stores search state. Each entity uses `PartitionKe
 ```
 GET https://foreupsoftware.com/index.php/api/booking/times
 ```
-Required parameters: `schedule_ids[]` array (4169, 4170, 4168, 4171, 4177), `is_aggregate=true`, `Referer` header. Time format returned is `yyyy-MM-dd HH:mm`.
+Required parameters: `schedule_ids[]` array, `is_aggregate=true`, `Referer` header. Time format returned is `yyyy-MM-dd HH:mm`.
 
 ### Course Configuration
 ```powershell
@@ -92,91 +92,74 @@ $Courses = @(
 
 ## Infrastructure
 
-Deployed via Bicep to Azure. Target is a Y1 Consumption (Dynamic) App Service Plan.
+Deployed via Bicep to Azure on a Y1 Consumption (Dynamic) App Service Plan. Infrastructure is defined in `infrastructure/main.bicep` and deployed via the GitHub Actions pipeline.
 
-### Active Deployment (Development Subscription)
-| Resource | Name |
+### Required Azure Resources
+| Resource | Type |
 |---|---|
-| Subscription | Development (22a583cb-68c9-4cda-a1b0-4b838a5ea729) |
-| Resource Group | RGP-USE-GREEN-LIGHT-DV |
-| Function App | fun-use-green-light |
-| Storage Account | stousegreenlightdv |
-| App Service Plan | asp-fun-use-green-light |
-| App Insights | ais-fun-use-green-light |
-| Location | East US |
+| Resource Group | Container for all resources |
+| Function App | PowerShell 7.4, Y1 Consumption |
+| Storage Account | StorageV2, Standard LRS |
+| App Service Plan | Y1 Dynamic (Consumption) |
+| Application Insights | Web, 30-day retention |
 
 ---
 
-## Pipeline
+## Deploying Your Own Instance
 
-Three-stage GitHub Actions pipeline defined in `.github/workflows/deploy-greenlight.yml`:
+### Prerequisites
+- Azure subscription with Contributor access
+- GitHub repository with Actions enabled
+- Telegram bot token from [@BotFather](https://t.me/botfather)
+- Azure CLI installed locally (for initial setup)
 
-1. **Validate** — Bicep dry run and what-if against the Development subscription
-2. **Security Scan** — Checkov scan on the Bicep template, SARIF report uploaded to GitHub
-3. **Deploy** — Bicep infrastructure deployment, Function App zip deploy, Telegram webhook registration. Runs on `workflow_dispatch` only — never triggered automatically on push.
+### GitHub Actions Secrets
+The following secrets must be configured in your repository under **Settings → Secrets and variables → Actions**:
 
-### Required GitHub Actions Secrets
-| Secret | Purpose |
+| Secret | Description |
 |---|---|
-| `AZURE_CREDENTIALS` | Service principal credentials for Development subscription |
-| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
-| `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
-| `TELEGRAM_SECRET_TOKEN` | Webhook validation token |
+| `AZURE_CREDENTIALS` | Service principal credentials JSON for your Azure subscription |
+| `TELEGRAM_BOT_TOKEN` | Bot token provided by BotFather |
+| `TELEGRAM_CHAT_ID` | Your Telegram chat ID (the bot will only respond to this ID) |
+| `TELEGRAM_SECRET_TOKEN` | A secret string of your choosing used to validate webhook requests |
 
-### Service Principal
-- Name: `appreg-tee-time-alerts-dv`
-- Object ID: `b7bb9f16-9816-4120-adfe-a1acc0c9af53`
-- Role: Contributor on Development subscription
+### parameters.json
+Update `infrastructure/parameters.json` with your desired resource names and location before deploying.
 
-### Checkov Suppressions
-The following checks are suppressed via `--skip-check` in the pipeline:
+### Pipeline
+The three-stage GitHub Actions pipeline is defined in `.github/workflows/deploy-greenlight.yml`:
 
-| Check | Reason |
-|---|---|
-| CKV_AZURE_43 | Storage account name is parameter-driven and follows Azure naming rules |
-| CKV_AZURE_206 | LRS replication is intentional for a low-cost development workload |
-| CKV_AZURE_225 | Zone redundancy not supported on Y1 Consumption plan |
-| CKV_AZURE_16 | AAD authentication not required — webhook secured via Telegram secret token header |
-| CKV_AZURE_17 | Client certificates not applicable for a Telegram webhook receiver |
-| CKV_AZURE_71 | Managed identity migration is a backlog item — currently using storage account key |
-| CKV_AZURE_212 | Minimum instance count not configurable on Y1 Consumption plan |
-| CKV_AZURE_213 | Health check endpoint not warranted for this workload |
-| CKV_AZURE_222 | Public network access required for Telegram webhook delivery |
-| CKV_AZURE_59 | Storage networkAcls defaultAction reverted to Allow — Deny blocks Kudu filesystem access on Y1 Consumption plan |
+1. **Validate** — Bicep dry run and what-if preview
+2. **Security Scan** — Checkov static analysis on the Bicep template, SARIF report uploaded to GitHub
+3. **Deploy** — Bicep infrastructure deployment, Function App zip deploy, Telegram webhook registration
+
+The deploy stage runs on `workflow_dispatch` only and must be triggered manually from the Actions tab.
 
 ---
 
 ## Security
 
-- Function auth level: `anonymous`
-- Telegram webhook validates `X-Telegram-Bot-Api-Secret-Token` header on every request
-- `200 OK` returned immediately after token validation before any processing
-- Bot only processes messages from the authorised `TELEGRAM_CHAT_ID`
-- All secrets stored as Azure Function App settings and GitHub Actions secrets — never in code
+- Function auth level: `anonymous` — security is handled at the application layer
+- Every incoming webhook request is validated against the `X-Telegram-Bot-Api-Secret-Token` header
+- `200 OK` is returned immediately after token validation to prevent Telegram retry loops
+- The bot only processes messages from the configured `TELEGRAM_CHAT_ID`
+- All secrets are stored as Azure Function App settings and GitHub Actions secrets — never in source code
 
 ---
 
 ## Module Loading
 
-Managed dependencies (`requirements.psd1`) proved unreliable on the Y1 Consumption plan on this subscription. Az.Accounts (5.4.0) and Az.Storage (6.0.1) are bundled directly in `.azure-function/Modules/` and imported explicitly in `profile.ps1` on cold start. Managed dependencies were retested after the Development subscription deployment was stabilised and confirmed still unreliable — bundled modules are retained permanently for this workload.
+Az.Accounts (5.4.0) and Az.Storage (6.0.1) are bundled directly in `.azure-function/Modules/` and imported explicitly in `profile.ps1` on cold start. This approach is used in place of managed dependencies for reliability on the Y1 Consumption plan.
 
 ---
 
-## Backlog
+## Planned Enhancements
 
-| # | Item | Status |
-|---|---|---|
-| 1 | Production migration — move from Development to Production subscription | Pending |
-
----
-
-## Phase 2 Feature Enhancements
-
-1. **Configurable search window** — allow per-search time window override (e.g. "around noon") stored on the table entity
-2. **Course filtering** — allow searches scoped to a single course (e.g. "Rocky Point only")
-3. **Duplicate search protection** — detect and warn when a search for an already-watched date is submitted
-4. **Daily morning summary** — 7 AM digest of all active searches via a second timer trigger
-5. **Holes preference** — capture 9 vs 18 hole preference per search and pass through to ForeUp API filter
+1. **Configurable search window** — per-search time window override (e.g. "around noon")
+2. **Course filtering** — scope a search to a single course (e.g. "Rocky Point only")
+3. **Duplicate search protection** — warn when a search for an already-watched date is submitted
+4. **Daily morning summary** — 7 AM digest of all active searches
+5. **Holes preference** — capture 9 vs 18 hole preference per search
 
 ---
 
