@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # TeeTimeScheduler/run.ps1
-# Timer Trigger - Runs every 4 hours, checks all active searches and notifies
+# Timer Trigger - Runs every hour, checks all active searches and notifies
 # -----------------------------------------------------------------------------
 
 param($Timer)
@@ -46,10 +46,11 @@ function Get-ActiveSearches {
     return @{ Table = $Table; Entities = $Table.CloudTable.ExecuteQuery($Query) }
 }
 
-# --- Helper: Update LastChecked timestamp -------------------------------------
-function Update-LastChecked {
-    param($Table, $Entity)
-    $Entity.Properties['LastChecked'] = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString((Get-Date -Format 'o'))
+# --- Helper: Update LastChecked timestamp and CheckCount ----------------------
+function Update-SearchState {
+    param($Table, $Entity, [int]$CheckCount)
+    $Entity.Properties['LastChecked']  = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString((Get-Date -Format 'o'))
+    $Entity.Properties['CheckCount']   = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForInt($CheckCount)
     $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($Entity)) | Out-Null
 }
 
@@ -163,11 +164,18 @@ foreach ($Search in $Searches) {
     $DateLabel = $DateObj.ToString('dddd, dd MMMM yyyy')
     $DateStr   = $DateObj.ToString('MM-dd-yyyy')         # ForeUp format
 
-    Write-Host "Checking $DateKey for $Players player(s)..."
+    # Read CheckCount - default to 0 if property does not exist yet
+    $CheckCount = 0
+    if ($Search.Properties.ContainsKey('CheckCount') -and $null -ne $Search.Properties['CheckCount'].Int32Value) {
+        $CheckCount = $Search.Properties['CheckCount'].Int32Value
+    }
+    $CheckCount++
+
+    Write-Host "Checking $DateKey for $Players player(s) (check #$CheckCount)..."
 
     # Skip if date has already passed
     if ($DateObj.Date -lt (Get-Date).Date) {
-        Write-Host "Date $DateKey has passed - marking inactive"
+        Write-Host "Date $DateKey has passed - marking expired"
         $Search.Properties['Status'] = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString('expired')
         $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($Search)) | Out-Null
         Send-TelegramMessage "The date you were watching ($DateLabel) has passed without a tee time being found. Send me a new date if you'd like to search again."
@@ -176,7 +184,8 @@ foreach ($Search in $Searches) {
 
     $Hits = Get-TeeTimeHits -DateStr $DateStr -Players $Players
 
-    Update-LastChecked -Table $Table -Entity $Search
+    # Persist updated CheckCount and LastChecked regardless of result
+    Update-SearchState -Table $Table -Entity $Search -CheckCount $CheckCount
 
     if ($Hits.Count -gt 0) {
         $Lines = @("Tee time found!", "", "$DateLabel - $Players player(s)", "")
@@ -193,6 +202,12 @@ foreach ($Search in $Searches) {
         # alerts until you explicitly confirm you've booked it.
     } else {
         Write-Host "No hits for $DateKey - will check again next cycle."
+
+        # Every 6 checks (6 hours) with no result, send a still-looking notification
+        if ($CheckCount % 6 -eq 0) {
+            $HoursSearching = $CheckCount
+            Send-TelegramMessage "Still searching - no tee times found yet for $DateLabel ($Players player(s)) after $HoursSearching hours. I will keep checking every hour and alert you as soon as something opens up."
+        }
     }
 }
 

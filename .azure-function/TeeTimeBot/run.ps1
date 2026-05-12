@@ -16,6 +16,8 @@ $TableName      = 'ActiveSearches'
 $WindowStart    = '08:30'
 $WindowEnd      = '10:30'
 
+$PendingCancelKey = 'pending-cancel'
+
 $Courses = @(
     @{ Name = 'Rocky Point'; BookingClassId = 35; ScheduleId = 4171; BookingUrl = 'https://foreupsoftware.com/index.php/booking/a/20276/10#/teetimes' }
     @{ Name = 'Fox Hollow';  BookingClassId = 35; ScheduleId = 4170; BookingUrl = 'https://foreupsoftware.com/index.php/booking/a/20276/10#/teetimes' }
@@ -37,6 +39,25 @@ function Send-TelegramMessage {
 function Get-TableContext {
     $StorageCtx = New-AzStorageContext -StorageAccountName $StorageAccount -StorageAccountKey $StorageKey
     return Get-AzStorageTable -Name $TableName -Context $StorageCtx
+}
+
+# --- Helper: Convert UTC ISO string to Eastern time label ---------------------
+function Format-EasternTime {
+    param([string]$UtcIsoString)
+    try {
+        $Utc     = [datetime]::Parse($UtcIsoString, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+        $Eastern = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($Utc, 'America/New_York')
+        return $Eastern.ToString('dddd, dd MMMM yyyy') + ' at ' + $Eastern.ToString('h:mm tt') + ' ET'
+    } catch {
+        return $UtcIsoString
+    }
+}
+
+# --- Helper: Build a readable date label from a RowKey (yyyy-MM-dd) -----------
+function Format-DateLabel {
+    param([string]$RowKey)
+    $D = [datetime]::ParseExact($RowKey, 'yyyy-MM-dd', $null)
+    return $D.ToString('dddd, dd MMMM yyyy')
 }
 
 # --- Helper: Parse date from natural language ---------------------------------
@@ -207,33 +228,54 @@ function Save-ActiveSearch {
     $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::InsertOrReplace($Entity)) | Out-Null
 }
 
-# --- Helper: Cancel all active searches ---------------------------------------
-function Stop-ActiveSearches {
-    $Table   = Get-TableContext
+# --- Helper: Get all active search entities -----------------------------------
+function Get-ActiveSearchEntities {
+    param($Table)
     $Query   = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
     $Filter  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('PartitionKey', 'eq', $AuthChatId)
     $Filter2 = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
     $Query.FilterString = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter, 'and', $Filter2)
-
-    $Entities = $Table.CloudTable.ExecuteQuery($Query)
-    $Count    = 0
-    foreach ($Entity in $Entities) {
-        $Entity.Properties['Status'] = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString('cancelled')
-        $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($Entity)) | Out-Null
-        $Count++
-    }
-    return $Count
+    return @($Table.CloudTable.ExecuteQuery($Query))
 }
 
-# --- Helper: Get active search summary ----------------------------------------
-function Get-ActiveSearchSummary {
-    $Table   = Get-TableContext
-    $Query   = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
-    $Filter  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('PartitionKey', 'eq', $AuthChatId)
-    $Filter2 = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
-    $Query.FilterString = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter, 'and', $Filter2)
+# --- Helper: Cancel a single entity -------------------------------------------
+function Cancel-Entity {
+    param($Table, $Entity)
+    $Entity.Properties['Status'] = [Microsoft.Azure.Cosmos.Table.EntityProperty]::GeneratePropertyForString('cancelled')
+    $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($Entity)) | Out-Null
+}
 
-    return $Table.CloudTable.ExecuteQuery($Query)
+# --- Helper: Write pending-cancel flag to table -------------------------------
+function Set-PendingCancel {
+    param($Table)
+    $Entity              = New-Object Microsoft.Azure.Cosmos.Table.DynamicTableEntity
+    $Entity.PartitionKey = $AuthChatId
+    $Entity.RowKey       = $PendingCancelKey
+    $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::InsertOrReplace($Entity)) | Out-Null
+}
+
+# --- Helper: Remove pending-cancel flag from table ----------------------------
+function Clear-PendingCancel {
+    param($Table)
+    try {
+        $Entity = $Table.CloudTable.Execute(
+            [Microsoft.Azure.Cosmos.Table.TableOperation]::Retrieve($AuthChatId, $PendingCancelKey)
+        ).Result
+        if ($null -ne $Entity) {
+            $Table.CloudTable.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Delete($Entity)) | Out-Null
+        }
+    } catch {
+        Write-Host "Clear-PendingCancel: $_"
+    }
+}
+
+# --- Helper: Check if pending-cancel flag is set ------------------------------
+function Test-PendingCancel {
+    param($Table)
+    $Result = $Table.CloudTable.Execute(
+        [Microsoft.Azure.Cosmos.Table.TableOperation]::Retrieve($AuthChatId, $PendingCancelKey)
+    ).Result
+    return $null -ne $Result
 }
 
 # --- Main logic ---------------------------------------------------------------
@@ -265,29 +307,124 @@ if ([string]$ChatId -ne $AuthChatId) {
 
 $TextLower = $Text.ToLower().Trim()
 
+# Get a single table reference reused throughout this invocation
+$Table = Get-TableContext
+
+# -- NEVERMIND / FORGET IT -----------------------------------------------------
+# Checked before everything else - clears pending-cancel and confirms no changes made
+if ($TextLower -match '\b(nevermind|never mind|forget it|forget that|no thanks|nope)\b') {
+    Clear-PendingCancel -Table $Table
+    Send-TelegramMessage "No changes made - all your searches are still active. Send ``Status`` to see what I'm watching."
+    return
+}
+
+# -- PENDING CANCEL REPLY ------------------------------------------------------
+# If a multi-search prompt was sent in a previous message, treat this as the date reply
+if (Test-PendingCancel -Table $Table) {
+    Write-Host "Pending cancel state active - treating message as cancellation reply"
+
+    # "Stop all" still works here
+    if ($TextLower -match '\ball\b') {
+        $Entities = Get-ActiveSearchEntities -Table $Table
+        foreach ($Entity in $Entities) { Cancel-Entity -Table $Table -Entity $Entity }
+        Clear-PendingCancel -Table $Table
+        Send-TelegramMessage "All searches stopped. Enjoy your round!"
+        return
+    }
+
+    $ParsedDate = Parse-Date -Text $Text
+
+    if ($null -ne $ParsedDate) {
+        $TargetKey    = $ParsedDate.ToString('yyyy-MM-dd')
+        $DateLabel    = Format-DateLabel -RowKey $TargetKey
+        $Entities     = Get-ActiveSearchEntities -Table $Table
+        $MatchedEntry = @($Entities | Where-Object { $_.RowKey -eq $TargetKey })
+
+        Clear-PendingCancel -Table $Table
+
+        if ($MatchedEntry.Count -eq 0) {
+            Send-TelegramMessage "I don't have an active search for $DateLabel. Send ``Status`` to see what I'm currently watching."
+        } else {
+            Cancel-Entity -Table $Table -Entity $MatchedEntry[0]
+            Send-TelegramMessage "Stopped searching for $DateLabel. Send me a new date any time you'd like to search again."
+        }
+    } else {
+        # Could not parse a date from the reply - prompt again
+        Send-TelegramMessage "I couldn't work out which date you meant. Please reply with the date you want to cancel, say ``Stop all`` to cancel everything, or say ``Nevermind`` to keep all searches active."
+    }
+    return
+}
+
 # -- STOP / DONE / BOOKED ------------------------------------------------------
 if ($TextLower -match '\b(stop|done|cancel|booked|i.ve booked|i have booked)\b') {
-    $Cancelled = Stop-ActiveSearches
-    if ($Cancelled -gt 0) {
-        Send-TelegramMessage "Enjoy your round! I've stopped checking for tee times."
-    } else {
+
+    $Entities = Get-ActiveSearchEntities -Table $Table
+
+    if ($Entities.Count -eq 0) {
         Send-TelegramMessage "No active searches to stop."
+        return
     }
+
+    # "Stop all" - cancel everything unconditionally
+    if ($TextLower -match '\ball\b') {
+        foreach ($Entity in $Entities) { Cancel-Entity -Table $Table -Entity $Entity }
+        Send-TelegramMessage "All searches stopped. Enjoy your round!"
+        return
+    }
+
+    # Try to parse a date from the message
+    $ParsedDate = Parse-Date -Text $Text
+
+    if ($null -ne $ParsedDate) {
+        $TargetKey    = $ParsedDate.ToString('yyyy-MM-dd')
+        $DateLabel    = Format-DateLabel -RowKey $TargetKey
+        $MatchedEntry = @($Entities | Where-Object { $_.RowKey -eq $TargetKey })
+
+        if ($MatchedEntry.Count -eq 0) {
+            Send-TelegramMessage "I don't have an active search for $DateLabel. Send ``Status`` to see what I'm currently watching."
+        } else {
+            Cancel-Entity -Table $Table -Entity $MatchedEntry[0]
+            Send-TelegramMessage "Stopped searching for $DateLabel. Send me a new date any time you'd like to search again."
+        }
+        return
+    }
+
+    # No date in message - single active search, cancel without prompting
+    if ($Entities.Count -eq 1) {
+        $DateLabel = Format-DateLabel -RowKey $Entities[0].RowKey
+        Cancel-Entity -Table $Table -Entity $Entities[0]
+        Send-TelegramMessage "Stopped searching for $DateLabel. Enjoy your round!"
+        return
+    }
+
+    # No date in message - multiple active searches, set pending flag and prompt
+    Set-PendingCancel -Table $Table
+    $Lines = @('You have multiple active searches. Which date would you like to stop?', '')
+    foreach ($E in $Entities) {
+        $Lines += '  - ' + (Format-DateLabel -RowKey $E.RowKey)
+    }
+    $Lines += ''
+    $Lines += 'Reply with the date you want to cancel, or say "Stop all" to cancel everything.'
+    $Lines += 'Say "Nevermind" if you don''t want to make any changes.'
+    Send-TelegramMessage ($Lines -join "`n")
     return
 }
 
 # -- STATUS --------------------------------------------------------------------
 if ($TextLower -match '\b(status|what are you watching|what are you checking)\b') {
-    $Active = Get-ActiveSearchSummary
-    if ($null -eq $Active -or @($Active).Count -eq 0) {
+    Clear-PendingCancel -Table $Table
+    $Entities = Get-ActiveSearchEntities -Table $Table
+    if ($Entities.Count -eq 0) {
         Send-TelegramMessage "No active tee time searches right now. Send me a date and player count to start one!"
     } else {
         $Lines = @('Active searches:')
-        foreach ($E in $Active) {
-            $Date    = $E.RowKey
-            $Players = $E.Properties['Players'].Int32Value
-            $Checked = $E.Properties['LastChecked'].StringValue
-            $Lines  += "  - $Date for $Players player(s) (last checked: $Checked)"
+        foreach ($E in $Entities) {
+            $DateLabel      = Format-DateLabel -RowKey $E.RowKey
+            $Players        = $E.Properties['Players'].Int32Value
+            $LastCheckedRaw = $E.Properties['LastChecked'].StringValue
+            $LastCheckedET  = Format-EasternTime -UtcIsoString $LastCheckedRaw
+            $Lines += "  - $DateLabel for $Players player(s)"
+            $Lines += "    Last checked: $LastCheckedET"
         }
         Send-TelegramMessage ($Lines -join "`n")
     }
@@ -296,6 +433,7 @@ if ($TextLower -match '\b(status|what are you watching|what are you checking)\b'
 
 # -- HELP ----------------------------------------------------------------------
 if ($TextLower -match '\b(help|commands|what can you do)\b') {
+    Clear-PendingCancel -Table $Table
     $HelpText = @"
 Tee Time Bot - Commands
 
@@ -306,21 +444,35 @@ To start a search:
 To check status:
   "Status"
 
-To stop searching:
+To stop a specific search:
+  "Stop May 17th"
+  "Stop Sunday"
+  "Done May 16th"
+
+To stop all searches:
+  "Stop all"
+
+To stop when only one search is active:
   "Stop", "Done", "I've booked it"
 
-I check Rocky Point and Fox Hollow for 8:30-10:30 AM slots every 4 hours automatically.
+To back out without making changes:
+  "Nevermind", "Never mind", "Forget it"
+
+I check Rocky Point and Fox Hollow for 8:30-10:30 AM slots every hour automatically.
 "@
     Send-TelegramMessage $HelpText
     return
 }
 
 # -- NEW SEARCH REQUEST --------------------------------------------------------
+# Clear any stale pending-cancel flag before processing a new search
+Clear-PendingCancel -Table $Table
+
 $ParsedDate    = Parse-Date -Text $Text
 $ParsedPlayers = Parse-Players -Text $Text
 
 if ($null -eq $ParsedDate) {
-    Send-TelegramMessage "I couldn't work out which date you meant. Try something like:`n`n  `"Looking for a tee time on May 17th for 2 players`"`n  `"Check Sunday for 4 players`""
+    Send-TelegramMessage "I couldn't work out which date you meant. Try something like:`n`n  ``Looking for a tee time on May 17th for 2 players```n  ``Check Sunday for 4 players``"
     return
 }
 
@@ -339,8 +491,8 @@ if ($Hits.Count -gt 0) {
     foreach ($Hit in $Hits) {
         $Lines += "- $($Hit.Course) @ $($Hit.Time) ($($Hit.Holes) holes, $($Hit.Spots) spot(s))`n  Book: $($Hit.BookUrl)"
     }
-    $Lines += "`nSend ``Done`` or ``I've booked it`` once you've secured your slot!"
+    $Lines += "`nSend ``Done [date]`` or ``Stop [date]`` once you've secured your slot!"
     Send-TelegramMessage ($Lines -join "`n")
 } else {
-    Send-TelegramMessage "No times available right now in the 8:30-10:30 AM window for $DateLabel.`n`nI'll keep checking every 4 hours and ping you when something opens up. Send ``Stop`` at any time to cancel."
+    Send-TelegramMessage "No times available right now in the 8:30-10:30 AM window for $DateLabel.`n`nI'll keep checking every hour and ping you when something opens up. Send ``Stop`` at any time to cancel."
 }
