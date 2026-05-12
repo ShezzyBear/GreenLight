@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # TeeTimeScheduler/run.ps1
-# Timer Trigger - Runs every hour, checks all active searches and notifies
+# Timer Trigger - Runs every 30 minutes, checks all active searches and notifies
 # -----------------------------------------------------------------------------
 
 param($Timer)
@@ -202,12 +202,6 @@ foreach ($Search in $Searches) {
         # alerts until you explicitly confirm you've booked it.
     } else {
         Write-Host "No hits for $DateKey - will check again next cycle."
-
-        # Every 6 checks (6 hours) with no result, send a still-looking notification
-        if ($CheckCount % 6 -eq 0) {
-            $HoursSearching = $CheckCount
-            Send-TelegramMessage "Still searching - no tee times found yet for $DateLabel ($Players player(s)) after $HoursSearching hours. I will keep checking every hour and alert you as soon as something opens up."
-        }
     }
 }
 
