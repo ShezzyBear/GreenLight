@@ -56,6 +56,10 @@ function Format-EasternTime {
 # --- Helper: Build a readable date label from a RowKey (yyyy-MM-dd) -----------
 function Format-DateLabel {
     param([string]$RowKey)
+    if ([string]::IsNullOrWhiteSpace($RowKey)) {
+        Write-Host "Format-DateLabel called with empty RowKey - skipping"
+        return $null
+    }
     $D = [datetime]::ParseExact($RowKey, 'yyyy-MM-dd', $null)
     return $D.ToString('dddd, dd MMMM yyyy')
 }
@@ -231,10 +235,13 @@ function Save-ActiveSearch {
 # --- Helper: Get all active search entities -----------------------------------
 function Get-ActiveSearchEntities {
     param($Table)
-    $Query   = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
-    $Filter  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('PartitionKey', 'eq', $AuthChatId)
-    $Filter2 = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
-    $Query.FilterString = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter, 'and', $Filter2)
+    $Query    = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
+    $Filter1  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('PartitionKey', 'eq', $AuthChatId)
+    $Filter2  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
+    $Filter3  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('RowKey', 'ne', $PendingCancelKey)
+    $Combined = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter1, 'and', $Filter2)
+    $Combined = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Combined, 'and', $Filter3)
+    $Query.FilterString = $Combined
     return @($Table.CloudTable.ExecuteQuery($Query))
 }
 
@@ -403,6 +410,11 @@ if ($TextLower -match '\b(stop|done|cancel|booked|i.ve booked|i have booked)\b')
     # No date in message - single active search, cancel without prompting
     if ($Entities.Count -eq 1) {
         $DateLabel = Format-DateLabel -RowKey $Entities[0].RowKey
+        if ($null -eq $DateLabel) {
+            Write-Host "Single entity has unparseable RowKey '$($Entities[0].RowKey)' - skipping cancel"
+            Send-TelegramMessage "Something went wrong reading your search. Send ``Status`` to check what I'm watching."
+            return
+        }
         Cancel-Entity -Table $Table -Entity $Entities[0]
         Send-TelegramMessage "Stopped searching for $DateLabel. Enjoy your round!"
         return
@@ -412,7 +424,8 @@ if ($TextLower -match '\b(stop|done|cancel|booked|i.ve booked|i have booked)\b')
     Set-PendingCancel -Table $Table
     $Lines = @('You have multiple active searches. Which date would you like to stop?', '')
     foreach ($E in $Entities) {
-        $Lines += '  - ' + (Format-DateLabel -RowKey $E.RowKey)
+        $Label = Format-DateLabel -RowKey $E.RowKey
+        if ($null -ne $Label) { $Lines += '  - ' + $Label }
     }
     $Lines += ''
     $Lines += 'Reply with the date you want to cancel, or say "Stop all" to cancel everything.'
@@ -430,7 +443,11 @@ if ($TextLower -match '\b(status|what are you watching|what are you checking)\b'
     } else {
         $Lines = @('Active searches:')
         foreach ($E in $Entities) {
-            $DateLabel      = Format-DateLabel -RowKey $E.RowKey
+            $DateLabel = Format-DateLabel -RowKey $E.RowKey
+            if ($null -eq $DateLabel) {
+                Write-Host "Skipping entity with unparseable RowKey '$($E.RowKey)' in Status"
+                continue
+            }
             $Players        = $E.Properties['Players'].Int32Value
             $LastCheckedRaw = $E.Properties['LastChecked'].StringValue
             $LastCheckedET  = Format-EasternTime -UtcIsoString $LastCheckedRaw

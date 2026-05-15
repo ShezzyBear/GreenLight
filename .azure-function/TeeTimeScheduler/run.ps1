@@ -12,8 +12,9 @@ $StorageAccount = $env:STORAGE_ACCOUNT_NAME
 $StorageKey     = $env:STORAGE_ACCOUNT_KEY
 $TableName      = 'ActiveSearches'
 
-$WindowStart    = '08:30'
-$WindowEnd      = '10:30'
+$WindowStart      = '08:30'
+$WindowEnd        = '10:30'
+$PendingCancelKey = 'pending-cancel'
 
 $Courses = @(
     @{ Name = 'Rocky Point'; BookingClassId = 35; ScheduleId = 4171; BookingUrl = 'https://foreupsoftware.com/index.php/booking/a/20276/10#/teetimes' }
@@ -39,9 +40,10 @@ function Get-ActiveSearches {
     $StorageCtx = New-AzStorageContext -StorageAccountName $StorageAccount -StorageAccountKey $StorageKey
     $Table      = Get-AzStorageTable -Name $TableName -Context $StorageCtx
 
-    $Query   = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
-    $Filter  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
-    $Query.FilterString = $Filter
+    $Query    = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
+    $Filter1  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
+    $Filter2  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('RowKey', 'ne', $PendingCancelKey)
+    $Query.FilterString = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter1, 'and', $Filter2)
 
     return @{ Table = $Table; Entities = $Table.CloudTable.ExecuteQuery($Query) }
 }
@@ -158,7 +160,14 @@ if ($null -eq $Searches -or @($Searches).Count -eq 0) {
 Write-Host "Found $(@($Searches).Count) active search(es) to check."
 
 foreach ($Search in $Searches) {
-    $DateKey   = $Search.RowKey                          # yyyy-MM-dd
+    $DateKey = $Search.RowKey
+
+    # Guard: skip any entity that doesn't look like a real date key
+    if ([string]::IsNullOrWhiteSpace($DateKey) -or $DateKey -notmatch '^\d{4}-\d{2}-\d{2}$') {
+        Write-Host "Skipping entity with non-date RowKey '$DateKey'"
+        continue
+    }
+
     $Players   = $Search.Properties['Players'].Int32Value
     $DateObj   = [datetime]::ParseExact($DateKey, 'yyyy-MM-dd', $null)
     $DateLabel = $DateObj.ToString('dddd, dd MMMM yyyy')
