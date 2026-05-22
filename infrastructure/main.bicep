@@ -120,7 +120,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly:    true
     siteConfig: {
-      powerShellVersion: '7.5'
+      powerShellVersion: '7.4'
       ftpsState:         'Disabled'
       minTlsVersion:     '1.2'
       http20Enabled:     true
