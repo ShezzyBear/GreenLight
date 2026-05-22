@@ -44,10 +44,14 @@ function Format-EasternTime {
 $StorageCtx = New-AzStorageContext -StorageAccountName $StorageAccount -StorageAccountKey $StorageKey
 $Table      = Get-AzStorageTable -Name $TableName -Context $StorageCtx
 
+$PendingCancelKey = 'pending-cancel'
+
 $Query   = [Microsoft.Azure.Cosmos.Table.TableQuery]::new()
 $Filter  = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('PartitionKey', 'eq', $AuthChatId)
 $Filter2 = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('Status', 'eq', 'active')
-$Query.FilterString = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter, 'and', $Filter2)
+$Filter3 = [Microsoft.Azure.Cosmos.Table.TableQuery]::GenerateFilterCondition('RowKey', 'ne', $PendingCancelKey)
+$Combined = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Filter, 'and', $Filter2)
+$Query.FilterString = [Microsoft.Azure.Cosmos.Table.TableQuery]::CombineFilters($Combined, 'and', $Filter3)
 
 $Searches = @($Table.CloudTable.ExecuteQuery($Query))
 
@@ -61,7 +65,13 @@ Write-Host "Sending morning summary for $($Searches.Count) active search(es)."
 $Lines = @('Good morning! Here''s what I''m watching today:', '')
 
 foreach ($Search in $Searches) {
-    $DateKey        = $Search.RowKey
+    $DateKey = $Search.RowKey
+
+    if ([string]::IsNullOrWhiteSpace($DateKey) -or $DateKey -notmatch '^\d{4}-\d{2}-\d{2}$') {
+        Write-Host "Skipping entity with non-date RowKey '$DateKey' in TeeTimeSummary"
+        continue
+    }
+
     $DateObj        = [datetime]::ParseExact($DateKey, 'yyyy-MM-dd', $null)
     $DateLabel      = $DateObj.ToString('dddd, dd MMMM yyyy')
     $Players        = $Search.Properties['Players'].Int32Value

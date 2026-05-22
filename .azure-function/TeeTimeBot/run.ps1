@@ -56,8 +56,8 @@ function Format-EasternTime {
 # --- Helper: Build a readable date label from a RowKey (yyyy-MM-dd) -----------
 function Format-DateLabel {
     param([string]$RowKey)
-    if ([string]::IsNullOrWhiteSpace($RowKey)) {
-        Write-Host "Format-DateLabel called with empty RowKey - skipping"
+    if ([string]::IsNullOrWhiteSpace($RowKey) -or $RowKey -notmatch '^\d{4}-\d{2}-\d{2}$') {
+        Write-Host "Format-DateLabel called with invalid RowKey '$RowKey' - skipping"
         return $null
     }
     $D = [datetime]::ParseExact($RowKey, 'yyyy-MM-dd', $null)
@@ -320,6 +320,12 @@ Write-Host "Message received from chat $ChatId : $Text"
 # Security: only process messages from your own chat
 if ([string]$ChatId -ne $AuthChatId) {
     Write-Host "Unauthorised chat ID $ChatId - ignoring"
+    return
+}
+
+# Non-text updates (stickers, photos, edited messages) have no .text - silently ignore
+if ($null -eq $Text) {
+    Write-Host "Non-text message received - ignoring"
     return
 }
 
